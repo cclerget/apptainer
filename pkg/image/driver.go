@@ -69,10 +69,10 @@ type Driver interface {
 	Start(*DriverParams, int) error
 	// Stop the driver related to given mount target for cleanup.
 	Stop(string) error
-	// Check if any of the image driver processes matches the given
-	// pid that exited with the given status and return an error if
-	// one of them does, or nil if they do not.
-	Stopped(int, syscall.WaitStatus) error
+	// Check if any of the image driver processes have stopped and
+	// return the status and an error if one of them has, or nil if
+	// they have not.
+	CheckStopped() (syscall.WaitStatus, error)
 	// Features Feature returns supported features.
 	Features() DriverFeature
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/apptainer/apptainer/internal/pkg/plugin"
 	apptainercallback "github.com/apptainer/apptainer/pkg/plugin/callback/runtime/engine/apptainer"
 	"github.com/apptainer/apptainer/pkg/sylog"
+	"golang.org/x/sys/unix"
 )
 
 // MonitorContainer is called from master once the container has
@@ -44,58 +45,78 @@ func (e *EngineOperations) MonitorContainer(pid int, signals chan os.Signal) (sy
 		return callbacks[0].(apptainercallback.MonitorContainer)(e.CommonConfig, pid, signals)
 	}
 
-	// Prevent the signal loop from waiting indefinitely by waking it up
-	// periodically, because we have seen sometimes SIGCHLD doesn't show.
-	// This problem has been seen in particular in setuid mode on
-	// Ubuntu 22.04 when one of the image driver programs dies with
-	// an immediate error.
+	// If we depend only on syscall.SIGCHLD to find out when a child dies,
+	// we sometimes do not see the signal until some other signal is
+	// received.  This problem has been seen in particular in setuid mode
+	// on Ubuntu 22.04 with go1.20.5 when one of the image driver programs
+	// dies with an immediate error.  To avoid that problem, use waitid
+	// with WNOWAIT in a separate go func and ignore the SIGCHLD signal.
+
+	childExited := make(chan error, 1)
+
 	go func() {
-		pid := syscall.Getpid()
 		for {
-			time.Sleep(time.Second)
-			syscall.Kill(pid, syscall.SIGURG)
+			var siginfo unix.Siginfo
+			err := unix.Waitid(unix.P_ALL, 0, &siginfo, syscall.WNOWAIT|syscall.WEXITED, nil)
+			if err == syscall.ECHILD {
+				break
+			}
+			if err != syscall.EINTR {
+				childExited <- err
+				// In case it is not a process known to the
+				// Monitor, give a chance for another thread
+				// to identify it
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 	}()
 
 	for {
-		s := <-signals
-		switch s {
-		case syscall.SIGCHLD:
-			wpid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
+		select {
+		case err := <-childExited:
 			if err != nil {
-				return status, fmt.Errorf("error while waiting for child: %s", err)
+				return status, fmt.Errorf("error from Waitid while waiting for child: %s", err)
 			}
-			if wpid == 0 {
-				// no child was actually waiting to be reaped
-				continue
+			var wpid int
+			wpid, err = syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+			if err != nil {
+				return status, fmt.Errorf("error while waiting for child %v: %s", pid, err)
 			}
-			sylog.Debugf("SIGCHLD received for process %d", wpid)
+			if wpid == pid {
+				sylog.Debugf("Container process stopped")
+				return status, nil
+			}
 			if imageDriver != nil {
-				err := imageDriver.Stopped(wpid, status)
+				status, err = imageDriver.CheckStopped()
 				if err != nil {
 					return status, err
 				}
 			}
-			if wpid == pid {
-				return status, nil
-			}
+			sylog.Debugf("Stopped child not identified")
 			continue
-		case syscall.SIGURG:
-			// Ignore SIGURG, which is used for non-cooperative goroutine
-			// preemption starting with Go 1.14. For more information, see
-			// https://github.com/golang/go/issues/24543.
-			break
-		default:
-			if e.EngineConfig.GetSignalPropagation() {
-				if err := syscall.Kill(pid, s.(syscall.Signal)); err != nil {
-					return status, fmt.Errorf("interrupted by signal %s", s.String())
+		case s := <-signals:
+			switch s {
+			case syscall.SIGCHLD:
+				// Ignore SIGCHLD because it is handled by separate go func
+				continue
+			case syscall.SIGURG:
+				// Ignore SIGURG, which is used for non-cooperative goroutine
+				// preemption starting with Go 1.14. For more information, see
+				// https://github.com/golang/go/issues/24543.
+				break
+			default:
+				sylog.Debugf("%s received", s)
+				if e.EngineConfig.GetSignalPropagation() {
+					if err := syscall.Kill(pid, s.(syscall.Signal)); err != nil {
+						return status, fmt.Errorf("interrupted by signal %s", s.String())
+					}
 				}
-			}
-			// Handle CTRL-Z and send ourself a SIGSTOP to implicitly send SIGCHLD
-			// signal to parent process as this process is the direct child
-			if s == syscall.SIGTSTP {
-				if err := syscall.Kill(os.Getpid(), syscall.SIGSTOP); err != nil {
-					return status, fmt.Errorf("received SIGTSTP but was not able to stop")
+				// Handle CTRL-Z and send ourself a SIGSTOP to implicitly send SIGCHLD
+				// signal to parent process as this process is the direct child
+				if s == syscall.SIGTSTP {
+					if err := syscall.Kill(os.Getpid(), syscall.SIGSTOP); err != nil {
+						return status, fmt.Errorf("received SIGTSTP but was not able to stop")
+					}
 				}
 			}
 		}

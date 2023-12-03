@@ -455,7 +455,7 @@ func (f *fuseappsFeature) stop(target string, kill bool) error {
 			continue
 		}
 		if instance.cmd == nil {
-			// already cleaned up by stopped()
+			// already cleaned up by checkStopped()
 			continue
 		}
 		process := instance.cmd.Process
@@ -507,22 +507,27 @@ func (f *fuseappsFeature) stop(target string, kill bool) error {
 }
 
 // Check if any of the child processes belonging to this image driver feature
-// matches the pid, and return an error if so, resulting in a fatal error
-func (f *fuseappsFeature) stopped(pid int, ws syscall.WaitStatus) error {
+// has stopped, and return the status and error if it has.
+func (f *fuseappsFeature) checkStopped() (status syscall.WaitStatus, err error) {
 	for _, instance := range f.instances {
 		cmd := instance.cmd
 		if cmd == nil {
 			continue
 		}
-		process := cmd.Process
-		if pid != process.Pid {
+		pid := cmd.Process.Pid
+		var wpid int
+		wpid, err = syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+		if err != nil {
+			return status, fmt.Errorf("error waiting for %v pid %v: %v", f.binName, pid, err)
+		}
+		if wpid == 0 {
 			continue
 		}
 
-		sylog.Debugf("%v pid %v has exited with status %v", f.binName, pid, ws.ExitStatus())
+		sylog.Debugf("%v pid %v has exited with status %v", f.binName, pid, status.ExitStatus())
 
 		// wait for the go funcs reading from the process to exit
-		err := <-instance.stdout.err
+		err = <-instance.stdout.err
 		if err != nil {
 			sylog.Debugf("error from %v stdout: %v", f.binName, err)
 		}
@@ -540,9 +545,9 @@ func (f *fuseappsFeature) stopped(pid int, ws syscall.WaitStatus) error {
 		instance.stderr.pipe.Close()
 		instance.cmd = nil
 
-		return fmt.Errorf("%v exited%v", f.binName, errmsg)
+		return status, fmt.Errorf("%v exited%v", f.binName, errmsg)
 	}
-	return nil
+	return status, nil
 }
 
 func (d *fuseappsDriver) allFeatures() []fuseappsFeature {
@@ -558,13 +563,13 @@ func (d *fuseappsDriver) Stop(target string) error {
 	return nil
 }
 
-func (d *fuseappsDriver) Stopped(pid int, ws syscall.WaitStatus) error {
+func (d *fuseappsDriver) CheckStopped() (status syscall.WaitStatus, err error) {
 	for _, feature := range d.allFeatures() {
-		if err := feature.stopped(pid, ws); err != nil {
-			return err
+		if status, err = feature.checkStopped(); err != nil {
+			return status, err
 		}
 	}
-	return nil
+	return status, nil
 }
 
 func (i *fuseappsInstance) filterMsg() string {
