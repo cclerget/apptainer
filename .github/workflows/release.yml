@@ -80,6 +80,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Check if release is needed because tag matches latest annotated
         env:
           GITHUB_REF: ${{github.ref}}
@@ -123,6 +125,7 @@ jobs:
         if: env.do_release
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: ${{ github.event_name != 'push tag' }}
           file: dist/docker/Dockerfile
           build-args: |
