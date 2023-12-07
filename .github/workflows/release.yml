@@ -106,7 +106,6 @@ jobs:
         if: env.do_release
         uses: docker/build-push-action@v5
         with:
-          context: .
           push: ${{ github.event_name != 'push tag' }}
           file: dist/docker/Dockerfile
           tags: ${{ steps.meta.outputs.tags }}

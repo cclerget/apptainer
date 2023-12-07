@@ -31,8 +31,7 @@ RUN . /buildenv.sh && \
 WORKDIR /build
 COPY . /build
 
-RUN --mount=type=cache,target=/gomod-cache,sharing=locked --mount=type=cache,target=/go-cache,sharing=locked \
-    . /buildenv.sh && \
+RUN . /buildenv.sh && \
     echo ${VERSION} > VERSION && \
     export PKG_CONFIG_PATH= \
     export PKG_CONFIG_SYSROOT_DIR=${SYSROOT_BUILD} \
