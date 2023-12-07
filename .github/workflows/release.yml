@@ -109,8 +109,8 @@ jobs:
         with:
           push: ${{ github.event_name != 'push tag' }}
           file: dist/docker/Dockerfile
-          build-args:
-          - VERSION=${{ env.git_tag }}
+          build-args: |
+            VERSION=${{ env.git_tag }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
