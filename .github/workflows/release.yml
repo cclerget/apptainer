@@ -81,6 +81,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - run: git fetch --prune --unshallow --tags --force
 
       - name: Check if release is needed because tag matches latest annotated
         env:
