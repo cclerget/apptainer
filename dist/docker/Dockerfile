@@ -71,9 +71,7 @@ RUN . /buildenv.sh && \
 
 FROM scratch
 
-ARG SYSROOT=/sysroot
-
+COPY --from=rootfs /sysroot /
 COPY --from=build /opt/apptainer /opt/apptainer
-COPY --from=rootfs ${SYSROOT} /
 
 CMD ["/usr/bin/apptainer"]
